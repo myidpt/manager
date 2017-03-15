@@ -233,3 +233,12 @@ func ValidateDestinationPolicy(msg proto.Message) error {
 	}
 	return nil
 }
+
+// ValidateMixerPolicy checks mixer policies
+func ValidateMixerPolicy(msg proto.Message) error {
+	value, ok := msg.(*proxyconfig.MixerPolicy)
+	if !ok {
+		return fmt.Errorf("Cannot cast to mixer policy")
+	}
+	return nil
+}

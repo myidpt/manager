@@ -120,6 +120,11 @@ const (
 	DestinationPolicy = "destination-policy"
 	// DestinationPolicyProto message name
 	DestinationPolicyProto = "istio.proxy.v1alpha.config.DestinationPolicy"
+
+	// MixerPolicy defines the kind for the mixer policy configuration
+	MixerPolicy = "mixer-policy"
+	// MixerPolicyProto message name
+	MixerPolicyProto = "istio.proxy.v1alpha.config.MixerPolicy"
 )
 
 var (
@@ -137,6 +142,10 @@ var (
 		DestinationPolicy: ProtoSchema{
 			MessageName: DestinationPolicyProto,
 			Validate:    ValidateDestinationPolicy,
+		},
+		MixerPolicy: ProtoSchema{
+			MessageName: MixerPolicyProto,
+			Validate:    ValidateMixerPolicy,
 		},
 	}
 )
