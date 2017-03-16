@@ -22,14 +22,16 @@ import (
 	"os"
 	"strings"
 
+	ghodss_yaml "github.com/ghodss/yaml"
 	"github.com/golang/glog"
 	"github.com/golang/protobuf/proto"
 	"github.com/spf13/cobra"
-	"k8s.io/client-go/pkg/api"
 
 	"istio.io/manager/cmd"
 	"istio.io/manager/model"
 
+	"k8s.io/client-go/pkg/api"
+	meta_v1 "k8s.io/client-go/pkg/apis/meta/v1"
 	"k8s.io/client-go/pkg/util/yaml"
 )
 
@@ -51,6 +53,8 @@ var (
 	key    model.Key
 	schema model.ProtoSchema
 
+	extensionTypes = map[string]func(map[string]interface{}, inputDoc) error{"mixer-policy": mixerPolicyConverter}
+
 	postCmd = &cobra.Command{
 		Use:   "create",
 		Short: "Create policies and rules",
@@ -65,15 +69,58 @@ var (
 			if len(varr) == 0 {
 				return errors.New("nothing to create")
 			}
+			mixerStatechange := false
 			for _, v := range varr {
-				if err = setup(v.Type, v.Name); err != nil {
-					return err
+				if v.ParsedSpec != nil {
+					if err = setup(v.Type, v.Name); err != nil {
+						return err
+					}
+					err = cmd.Client.Post(key, v.ParsedSpec)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Posted %v %v\n", v.Type, v.Name)
+				} else {
+					mixerStatechange = true
 				}
-				err = cmd.Client.Post(key, v.ParsedSpec)
+			}
+			if mixerStatechange {
+				// By convention, the mixer uses keys globalconfig.yml and serviceconfig.yml.
+				// Currently we only support mixer-policy, which is part of globalconfig.yaml
+				globalConfig, err := getConfigMapYamlFile("mixer-config", "globalconfig.yml")
 				if err != nil {
 					return err
 				}
-				fmt.Printf("Posted %v %v\n", v.Type, v.Name)
+				// Merge each mixer-policy document with globalconfig.yaml
+				for _, v := range varr {
+					converterFunc, ok := extensionTypes[v.Type]
+					if ok {
+						if err = converterFunc(globalConfig, v); err != nil {
+							return err
+						}
+					}
+				}
+				// Istio Mixer stores the globalConfig as a YAML string inside JSON, so serialize it
+				newYaml, err := ghodss_yaml.Marshal(globalConfig)
+				if err != nil {
+					return err
+				}
+				// Now, wrap it in a jsonpatch.Patch object so that we can update just the globalconfig.yaml
+				// without touching other Istio Mixer settings
+				bytes, err := json.Marshal([]map[string]interface{}{{
+					"op":    "replace",
+					"path":  "/data/globalconfig.yml",
+					"value": string(newYaml)}})
+				if err != nil {
+					return err
+				}
+				// Now actually PATCH it
+				_, err = cmd.Client.GetKubernetesClient().CoreV1().ConfigMaps(cmd.RootFlags.Namespace).
+					Patch("mixer-config", api.JSONPatchType, bytes)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Patched mixer-config\n")
 			}
 
 			return nil
@@ -95,14 +142,19 @@ var (
 				return errors.New("nothing to replace")
 			}
 			for _, v := range varr {
-				if err = setup(v.Type, v.Name); err != nil {
-					return err
+				if v.ParsedSpec != nil {
+					if err = setup(v.Type, v.Name); err != nil {
+						return err
+					}
+					err = cmd.Client.Put(key, v.ParsedSpec)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Put %v %v\n", v.Type, v.Name)
+				} else {
+					// I am not sure how to patch, given that mixer policies are a list already
+					return errors.New("Replacing mixer-policy unimplemented")
 				}
-				err = cmd.Client.Put(key, v.ParsedSpec)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("Put %v %v\n", v.Type, v.Name)
 			}
 
 			return nil
@@ -142,11 +194,18 @@ var (
 					return fmt.Errorf("provide configuration type and name or -f option")
 				}
 				for i := 1; i < len(args); i++ {
-					if err := setup(args[0], args[i]); err != nil {
-						return err
-					}
-					if err := cmd.Client.Delete(key); err != nil {
-						return err
+					_, ok := extensionTypes[args[0]]
+					if !ok {
+						if err := setup(args[0], args[i]); err != nil {
+							return err
+						}
+						if err := cmd.Client.Delete(key); err != nil {
+							return err
+						}
+					} else {
+						if err := deleteExtensionType(args[0], args[1]); err != nil {
+							return err
+						}
 					}
 					fmt.Printf("Deleted %v %v\n", args[0], args[i])
 				}
@@ -165,12 +224,19 @@ var (
 				return errors.New("nothing to delete")
 			}
 			for _, v := range varr {
-				if err = setup(v.Type, v.Name); err != nil {
-					return err
-				}
-				err = cmd.Client.Delete(key)
-				if err != nil {
-					return err
+				_, ok := extensionTypes[v.Type]
+				if !ok {
+					if err = setup(v.Type, v.Name); err != nil {
+						return err
+					}
+					err = cmd.Client.Delete(key)
+					if err != nil {
+						return err
+					}
+				} else {
+					if err := deleteExtensionType(v.Type, v.Name); err != nil {
+						return err
+					}
 				}
 				fmt.Printf("Deleted %v %v\n", v.Type, v.Name)
 			}
@@ -241,6 +307,14 @@ func main() {
 	}
 }
 
+func setupNamespace() {
+	// use default namespace by default
+	if cmd.RootFlags.Namespace == "" {
+		glog.V(2).Info(fmt.Sprintf("Using default namespace %v\n", api.NamespaceDefault))
+		cmd.RootFlags.Namespace = api.NamespaceDefault
+	}
+}
+
 func setup(kind, name string) error {
 	var ok bool
 	// set proto schema
@@ -249,10 +323,7 @@ func setup(kind, name string) error {
 		return fmt.Errorf("unknown configuration type %s; use one of %v", kind, model.IstioConfig.Kinds())
 	}
 
-	// use default namespace by default
-	if cmd.RootFlags.Namespace == "" {
-		cmd.RootFlags.Namespace = api.NamespaceDefault
-	}
+	setupNamespace()
 
 	// set the config key
 	key = model.Key{
@@ -301,18 +372,81 @@ func readInputs() ([]inputDoc, error) {
 
 		schema, ok := model.IstioConfig[v.Type]
 		if !ok {
-			return nil, fmt.Errorf("unknown spec type %s", v.Type)
-		}
-		rr, err := schema.FromJSON(string(byteRule))
-		if err != nil {
-			return nil, fmt.Errorf("cannot parse proto message: %v", err)
-		}
-		glog.V(2).Info(fmt.Sprintf("Parsed %v %v into %v %v", v.Type, v.Name, schema.MessageName, rr))
 
-		v.ParsedSpec = rr
+			// If this is a "mixer-policy", there is no need to be able to get its schema from IstioConfig
+			_, ok := extensionTypes[v.Type]
+			if !ok {
+				glog.Error(fmt.Sprintf("unknown spec type %s", v.Type))
+				return nil, fmt.Errorf("unknown spec type %s", v.Type)
+			}
+
+			glog.V(2).Info(fmt.Sprintf("Encountered extended type %v %v", v.Type, v.Name))
+
+		} else {
+
+			rr, err := schema.FromJSON(string(byteRule))
+			if err != nil {
+				return nil, fmt.Errorf("cannot parse proto message: %v", err)
+			}
+			glog.V(2).Info(fmt.Sprintf("Parsed %v %v into %v %v", v.Type, v.Name, schema.MessageName, rr))
+
+			v.ParsedSpec = rr
+		}
 
 		varr = append(varr, v)
 	}
 
 	return varr, nil
+}
+
+// Given an inputDoc, add to "adapters" key
+// TODO Support for Replace and Delete?
+func mixerPolicyConverter(accum map[string]interface{}, mixerPolicy inputDoc) error {
+
+	mixerPolicySpec := mixerPolicy.Spec.(map[string]interface{})
+	mixerPolicyRules := mixerPolicySpec["rules"]
+	newAdapter := map[string]interface{}{"name": mixerPolicy.Type + "-" + mixerPolicy.Name,
+		"kind":   "quotas",
+		"impl":   "memQuota",
+		"params": map[string]interface{}{"rules": []interface{}{mixerPolicyRules}},
+	}
+	adapters := accum["adapters"].([]interface{})
+
+	// Verify no adapter by that name exists
+	for _, elem := range adapters {
+		if adapter, ok := elem.(map[string]interface{}); ok {
+			if adapter["name"] == newAdapter["name"] {
+				return fmt.Errorf("Mixer Policy %v already exists", mixerPolicy.Name)
+			}
+		}
+	}
+
+	accum["adapters"] = append(adapters, newAdapter)
+
+	return nil
+}
+
+func deleteExtensionType(t string, name string) error {
+	return fmt.Errorf("deleting an extension type unimplemented %v %v", t, name)
+}
+
+func getConfigMapYamlFile(name string, data string) (map[string]interface{}, error) {
+	setupNamespace()
+	configMap, err := cmd.Client.GetKubernetesClient().CoreV1().ConfigMaps(cmd.RootFlags.Namespace).
+		Get(name, meta_v1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	yamlString, ok := configMap.Data[data]
+	if !ok {
+		return nil, fmt.Errorf("%v does not have %v", name, data)
+	}
+
+	yamlDecoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(yamlString), 512*1024)
+	v := make(map[string]interface{}, 1)
+	err = yamlDecoder.Decode(&v)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
 }
