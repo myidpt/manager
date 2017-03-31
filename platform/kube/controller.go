@@ -27,7 +27,6 @@ import (
 
 	"istio.io/manager/model"
 
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/pkg/api"
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/apis/extensions/v1beta1"
@@ -628,37 +627,34 @@ const (
 
 // GetIstioServiceAccounts returns the Istio service accounts running a serivce hostname.
 // An empty array is always returned if an error occurs.
-func (c *Controller) GetIstioServiceAccounts(hostname string) ([]string, error) {
-	name, namespace, err := parseHostname(hostname)
-	saArray := make([]string, 0)
-	if err != nil {
-		glog.Warningf("parseHostname(%s) => error %v", hostname, err)
-		return saArray, err
-	}
-	svc, exists := c.serviceByKey(name, namespace)
-	if !exists {
-		err := fmt.Sprintf("Failed to get service for hostname %s.", hostname)
-		glog.Warningf(err)
-		return saArray, errors.New(err)
-	}
-	lo := v1.ListOptions{
-		LabelSelector: labels.Set(svc.Spec.Selector).String(),
-	}
-	// TODO: This is fragile, improve it.
-	pods, err := c.client.client.CoreV1().Pods(svc.Namespace).List(lo)
-	if err != nil {
-		glog.Warningf("Failed to get pods for service %s.", hostname)
-		return saArray, err
-	}
+func (c *Controller) GetIstioServiceAccounts(hostname string, ports []string) []string {
 	saSet := make(map[string]bool)
-	for _, p := range pods.Items {
-		sa := makeIstioServiceAccount(p.Spec.ServiceAccountName, namespace, LocalDomain)
-		if _, exists := saSet[sa]; !exists {
-			saSet[sa] = true
-			saArray = append(saArray, sa)
+	for _, si := range c.Instances(hostname, ports, model.TagsList{}) {
+		ip := si.Endpoint.Address
+		key, exists := c.pods.keys[ip]
+		if !exists {
+			continue
 		}
+		item, exists, err := c.pods.informer.GetStore().GetByKey(key)
+		if !exists {
+			continue
+		}
+		if err != nil {
+			glog.V(2).Infof("Error retrieving pod by key: %v", err)
+			continue
+		}
+
+		pod, _ := item.(*v1.Pod)
+		sa := makeIstioServiceAccount(pod.Spec.ServiceAccountName, pod.GetNamespace(), LocalDomain)
+		saSet[sa] = true
 	}
-	return saArray, nil
+
+	saArray := make([]string, 0)
+	for sa := range saSet {
+		saArray = append(saArray, sa)
+	}
+
+	return saArray
 }
 
 func makeIstioServiceAccount(sa string, ns string, domain string) string {
@@ -707,6 +703,7 @@ func newPodCache(ch cacheHandler) *PodCache {
 	}
 
 	ch.handler.append(func(obj interface{}, ev model.Event) error {
+		fmt.Println("event handler is called")
 		pod := *obj.(*v1.Pod)
 		ip := pod.Status.PodIP
 		if len(ip) > 0 {

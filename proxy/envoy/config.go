@@ -231,7 +231,7 @@ func buildOutboundHTTPRoutes(instances []*model.ServiceInstance, services []*mod
 	for _, service := range services {
 		var sslContext *SSLContextWithSAN
 		if context.MeshConfig.EnableAuth {
-			sslContext = buildClusterSSLContext(service.Hostname, context)
+			sslContext = buildClusterSSLContext(service, context)
 		}
 		for _, servicePort := range service.Ports {
 			protocol := servicePort.Protocol

@@ -46,9 +46,9 @@ func buildListenerSSLContext(mesh *MeshConfig) *SSLContext {
 }
 
 // buildClusterSSLContext returns an SSLContextWithSAN struct with VerifySubjectAltName.
-func buildClusterSSLContext(hostname string, context *ProxyContext) *SSLContextWithSAN {
+func buildClusterSSLContext(svc *model.Service, context *ProxyContext) *SSLContextWithSAN {
 	mesh := context.MeshConfig
-	serviceAccounts, _ := context.Discovery.GetIstioServiceAccounts(hostname)
+	serviceAccounts := context.Discovery.GetIstioServiceAccounts(svc.Hostname, svc.Ports.GetNames())
 	return &SSLContextWithSAN{
 		CertChainFile:        mesh.AuthConfigPath + "/cert-chain.pem",
 		PrivateKeyFile:       mesh.AuthConfigPath + "/key.pem",
