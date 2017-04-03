@@ -531,7 +531,9 @@ func createEndpoints(controller *Controller, name, namespace string, portNames, 
 	}
 }
 
-func createService(controller *Controller, name, namespace string, ports []int32, selector map[string]string, t *testing.T) {
+func createService(controller *Controller, name, namespace string, ports []int32, selector map[string]string,
+	t *testing.T) {
+
 	svcPorts := []v1.ServicePort{}
 	for _, p := range ports {
 		svcPorts = append(svcPorts, v1.ServicePort{
