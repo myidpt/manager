@@ -630,8 +630,7 @@ const (
 func (c *Controller) GetIstioServiceAccounts(hostname string, ports []string) []string {
 	saSet := make(map[string]bool)
 	for _, si := range c.Instances(hostname, ports, model.TagsList{}) {
-		ip := si.Endpoint.Address
-		key, exists := c.pods.keys[ip]
+		key, exists := c.pods.keys[si.Endpoint.Address]
 		if !exists {
 			continue
 		}
@@ -703,7 +702,6 @@ func newPodCache(ch cacheHandler) *PodCache {
 	}
 
 	ch.handler.append(func(obj interface{}, ev model.Event) error {
-		fmt.Println("event handler is called")
 		pod := *obj.(*v1.Pod)
 		ip := pod.Status.PodIP
 		if len(ip) > 0 {
