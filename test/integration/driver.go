@@ -236,7 +236,8 @@ func deploy(name, svcName, dType, port1, port2, port3, port4, version string, in
 	}
 	if params.enable_auth {
 		settings["enable_auth"] = "--enable_auth"
-		settings["auth_config_path"] = "--auth_config_path " + DefaultAuthConfigPath
+		settings["auth_config_path_flag"] = "--auth_config_path"
+		settings["auth_config_path"] = DefaultAuthConfigPath
 	}
 	if err := write("test/integration/"+dType+".yaml.tmpl", settings, w); err != nil {
 		return err

@@ -27,7 +27,7 @@ spec:
       - name: manager
         image: {{.hub}}/manager:{{.tag}}
         imagePullPolicy: Always
-        args: ["discovery", "-v", "{{.verbosity}}", "-n", "{{.namespace}}", "-m", "mixer:9091", "{{.enable_auth}}", "{{.auth_config_path}}"]
+        args: ["discovery", "-v", "{{.verbosity}}", "-n", "{{.namespace}}", "-m", "mixer:9091", "{{.enable_auth}}", "{{.auth_config_path_flag}}", "{{.auth_config_path}}"]
         ports:
         - containerPort: 8080
 ---
