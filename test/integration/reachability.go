@@ -142,6 +142,31 @@ func (r *reachability) makeRequests() error {
 			}
 		}
 	}
+	testAuthPods := [] string{"a-auth", "b-auth"}
+	for _, src := range testAuthPods {
+		for _, dst := range testAuthPods {
+			for _, port := range []string{"", ":80", ":8080"} {
+				for _, domain := range []string{"", "." + params.namespace} {
+					if params.parallel {
+						g.Go(r.makeRequest(src, dst, port, domain, func() bool {
+							select {
+							case <-time.After(time.Second):
+							// try again
+							case <-ctx.Done():
+								return true
+							}
+							return false
+						}))
+					} else {
+						if err := r.makeRequest(src, dst, port, domain, func() bool { return false })(); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if params.parallel {
 		if err := g.Wait(); err != nil {
 			return err

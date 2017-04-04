@@ -44,6 +44,7 @@ const (
 	DefaultSidecarProxyUID  = int64(1337)
 	DefaultSidecarProxyPort = 15001
 	DefaultRuntimeVerbosity = 2
+	DefaultAuthConfigPath   = "/etc/certs"
 )
 
 const (
@@ -76,6 +77,7 @@ type Params struct {
 	SidecarProxyPort int
 	Version          string
 	EnableCoreDump   bool
+	EnableAuth       bool
 }
 
 var enableCoreDumpContainer = map[string]interface{}{
@@ -137,8 +139,7 @@ func injectIntoPodTemplateSpec(p *Params, t *v1.PodTemplateSpec) error {
 	t.Annotations["pod.beta.kubernetes.io/init-containers"] = string(initAnnotationValue)
 
 	// sidecar proxy container
-	t.Spec.Containers = append(t.Spec.Containers,
-		v1.Container{
+	container := v1.Container{
 			Name:  runtimeContainerName,
 			Image: p.RuntimeImage,
 			Args: []string{
@@ -146,6 +147,7 @@ func injectIntoPodTemplateSpec(p *Params, t *v1.PodTemplateSpec) error {
 				"sidecar",
 				"-s", p.ManagerAddr,
 				"-m", p.MixerAddr,
+				"--auth_config_path", DefaultAuthConfigPath,
 				"-n", "$(POD_NAMESPACE)",
 				"-v", strconv.Itoa(p.RuntimeVerbosity),
 			},
@@ -175,8 +177,29 @@ func injectIntoPodTemplateSpec(p *Params, t *v1.PodTemplateSpec) error {
 			SecurityContext: &v1.SecurityContext{
 				RunAsUser: &p.SidecarProxyUID,
 			},
-		},
-	)
+		}
+
+	// Mount the secret volume.
+	if p.EnableAuth {
+		container.Args = append(container.Args, "--enable_auth")
+		container.VolumeMounts = append(container.VolumeMounts, v1.VolumeMount{
+			Name: "secret-volume",
+			ReadOnly: true,
+			MountPath: DefaultAuthConfigPath,
+		})
+
+		secretVolumeSource := v1.SecretVolumeSource{
+				SecretName: "istio.default",
+			}
+		t.Spec.Volumes = append(t.Spec.Volumes, v1.Volume{
+			Name: "secret-volume",
+			VolumeSource: v1.VolumeSource{
+				Secret: &secretVolumeSource,
+			},
+		})
+	}
+	t.Spec.Containers = append(t.Spec.Containers, container)
+
 	return nil
 }
 

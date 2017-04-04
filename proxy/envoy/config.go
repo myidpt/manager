@@ -325,6 +325,7 @@ func buildInboundListeners(instances []*model.ServiceInstance, mesh *MeshConfig)
 	listeners := make(Listeners, 0)
 	clusters := make(Clusters, 0)
 
+	fmt.Println("buildInboundListeners: enableAuth=", mesh.EnableAuth)
 	// inbound connections/requests are redirected to the endpoint address but appear to be sent
 	// to the service address
 	// assumes that endpoint addresses/ports are unique in the instance set

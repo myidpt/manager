@@ -43,6 +43,7 @@ const (
 	egressProxy      = "egress-proxy"
 	ingressProxy     = "ingress-proxy"
 	app              = "app"
+	DefaultSecret    = "istio.default"
 
 	// budget is the maximum number of retries with 1s delays
 	budget = 90
@@ -60,6 +61,7 @@ type parameters struct {
 	namespace  string
 	kubeconfig string
 	count      int
+	enable_auth bool
 	debug      bool
 	parallel   bool
 	logs       bool
@@ -90,6 +92,7 @@ func init() {
 	flag.StringVar(&params.kubeconfig, "kubeconfig", "platform/kube/config",
 		"kube config file (missing or empty file makes the test use in-cluster kube config instead)")
 	flag.IntVar(&params.count, "count", 1, "Number of times to run the tests after deploying")
+	flag.BoolVar(&params.enable_auth, "auth", false, "Enable/disable auth.")
 	flag.BoolVar(&params.debug, "debug", false, "Extra logging in the containers")
 	flag.BoolVar(&params.parallel, "parallel", true, "Run requests in parallel")
 	flag.BoolVar(&params.logs, "logs", true, "Validate pod logs (expensive in long-running tests)")
@@ -147,19 +150,29 @@ func setup() {
 	_, err = shell(fmt.Sprintf("kubectl -n %s apply -f test/integration/ingress.yaml", params.namespace))
 	check(err)
 
+	if params.enable_auth {
+		// setup auth resources
+		_, _ = shell(fmt.Sprintf("kubectl -n %s create secret generic " + DefaultSecret +
+		"--from-file=cert-chain.pem=test/integration/default_certs/cert-chain.pem "+
+		"--from-file=key.pem=test/integration/default_certs/key.pem "+
+		"--from-file=root-cert.pem=test/integration/default_certs/root-cert.pem",
+		params.namespace))
+	}
+
 	// deploy istio-infra
-	check(deploy("http-discovery", "http-discovery", managerDiscovery, "8080", "80", "9090", "90", "unversioned", false))
-	check(deploy("mixer", "mixer", mixer, "8080", "80", "9090", "90", "unversioned", false))
-	check(deploy("istio-egress", "istio-egress", egressProxy, "8080", "80", "9090", "90", "unversioned", false))
-	check(deploy("istio-ingress", "istio-ingress", ingressProxy, "8080", "80", "9090", "90", "unversioned", false))
+	check(deploy("http-discovery", "http-discovery", managerDiscovery, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
+	check(deploy("mixer", "mixer", mixer, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
+	check(deploy("istio-egress", "istio-egress", egressProxy, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
+	check(deploy("istio-ingress", "istio-ingress", ingressProxy, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
 
 	// deploy a healthy mix of apps, with and without proxy
-	check(deploy("t", "t", app, "8080", "80", "9090", "90", "unversioned", false))
-	check(deploy("a", "a", app, "8080", "80", "9090", "90", "unversioned", true))
-	check(deploy("b", "b", app, "80", "8080", "90", "9090", "unversioned", true))
-	check(deploy("hello", "hello", app, "8080", "80", "9090", "90", "v1", true))
-	check(deploy("world-v1", "world", app, "80", "8000", "90", "9090", "v1", true))
-	check(deploy("world-v2", "world", app, "80", "8000", "90", "9090", "v2", true))
+	check(deploy("t", "t", app, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
+	check(deploy("a", "a", app, "8080", "80", "9090", "90", "unversioned", true, params.enable_auth))
+	check(deploy("b", "b", app, "80", "8080", "90", "9090", "unversioned", true, params.enable_auth))
+	check(deploy("hello", "hello", app, "8080", "80", "9090", "90", "v1", true, params.enable_auth))
+	check(deploy("world-v1", "world", app, "80", "8000", "90", "9090", "v1", true, params.enable_auth))
+	check(deploy("world-v2", "world", app, "80", "8000", "90", "9090", "v2", true, params.enable_auth))
+
 	check(setPods())
 }
 
@@ -183,6 +196,11 @@ func teardown() {
 	if err := run("kubectl delete secret ingress -n " + params.namespace); err != nil {
 		glog.Warning(err)
 	}
+	if params.enable_auth {
+		if err := run("kubectl delete secret " + DefaultSecret + " -n " + params.namespace); err != nil {
+			glog.Warning(err)
+		}
+	}
 
 	if nameSpaceCreated {
 		deleteNamespace(client, params.namespace)
@@ -190,7 +208,7 @@ func teardown() {
 	}
 }
 
-func deploy(name, svcName, dType, port1, port2, port3, port4, version string, injectProxy bool) error {
+func deploy(name, svcName, dType, port1, port2, port3, port4, version string, injectProxy bool, enableAuth bool) error {
 	// write template
 	configFile := name + "-" + dType + ".yaml"
 
@@ -205,7 +223,7 @@ func deploy(name, svcName, dType, port1, port2, port3, port4, version string, in
 	}()
 
 	w := &bytes.Buffer{}
-	if err := write("test/integration/"+dType+".yaml.tmpl", map[string]string{
+	settings := map[string]string{
 		"service": svcName,
 		"name":    name,
 		"port1":   port1,
@@ -213,7 +231,12 @@ func deploy(name, svcName, dType, port1, port2, port3, port4, version string, in
 		"port3":   port3,
 		"port4":   port4,
 		"version": version,
-	}, w); err != nil {
+	}
+	if enableAuth {
+		settings["enable_auth"] = "--enable_auth"
+		settings["auth_config_path"] = "--auth_config_path /etc/certs"
+	}
+	if err := write("test/integration/"+dType+".yaml.tmpl", settings, w); err != nil {
 		return err
 	}
 
@@ -228,6 +251,7 @@ func deploy(name, svcName, dType, port1, port2, port3, port4, version string, in
 			SidecarProxyUID:  inject.DefaultSidecarProxyUID,
 			SidecarProxyPort: inject.DefaultSidecarProxyPort,
 			Version:          "manager-integration-test",
+			enableAuth:       enableAuth,
 		}
 		if err := inject.IntoResourceFile(p, w, writer); err != nil {
 			return err
@@ -418,6 +442,7 @@ func setPods() error {
 
 	for _, pod := range items {
 		if app, exists := pod.Labels["app"]; exists {
+			fmt.Println("Add pod: ", app, " -> ", pod.Name)
 			pods[app] = pod.Name
 		}
 	}
