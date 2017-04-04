@@ -52,6 +52,8 @@ const (
 	mixerTag = "6655a67"
 
 	ingressServiceName = "istio-ingress-controller"
+
+	DefaultAuthConfigPath = "/etc/certs"
 )
 
 type parameters struct {
@@ -160,18 +162,18 @@ func setup() {
 	}
 
 	// deploy istio-infra
-	check(deploy("http-discovery", "http-discovery", managerDiscovery, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
-	check(deploy("mixer", "mixer", mixer, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
-	check(deploy("istio-egress", "istio-egress", egressProxy, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
-	check(deploy("istio-ingress", "istio-ingress", ingressProxy, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
+	check(deploy("http-discovery", "http-discovery", managerDiscovery, "8080", "80", "9090", "90", "unversioned", false))
+	check(deploy("mixer", "mixer", mixer, "8080", "80", "9090", "90", "unversioned", false))
+	check(deploy("istio-egress", "istio-egress", egressProxy, "8080", "80", "9090", "90", "unversioned", false))
+	check(deploy("istio-ingress", "istio-ingress", ingressProxy, "8080", "80", "9090", "90", "unversioned", false))
 
 	// deploy a healthy mix of apps, with and without proxy
-	check(deploy("t", "t", app, "8080", "80", "9090", "90", "unversioned", false, params.enable_auth))
-	check(deploy("a", "a", app, "8080", "80", "9090", "90", "unversioned", true, params.enable_auth))
-	check(deploy("b", "b", app, "80", "8080", "90", "9090", "unversioned", true, params.enable_auth))
-	check(deploy("hello", "hello", app, "8080", "80", "9090", "90", "v1", true, params.enable_auth))
-	check(deploy("world-v1", "world", app, "80", "8000", "90", "9090", "v1", true, params.enable_auth))
-	check(deploy("world-v2", "world", app, "80", "8000", "90", "9090", "v2", true, params.enable_auth))
+	check(deploy("t", "t", app, "8080", "80", "9090", "90", "unversioned", false))
+	check(deploy("a", "a", app, "8080", "80", "9090", "90", "unversioned", true))
+	check(deploy("b", "b", app, "80", "8080", "90", "9090", "unversioned", true))
+	check(deploy("hello", "hello", app, "8080", "80", "9090", "90", "v1", true))
+	check(deploy("world-v1", "world", app, "80", "8000", "90", "9090", "v1", true))
+	check(deploy("world-v2", "world", app, "80", "8000", "90", "9090", "v2", true))
 
 	check(setPods())
 }
@@ -208,7 +210,7 @@ func teardown() {
 	}
 }
 
-func deploy(name, svcName, dType, port1, port2, port3, port4, version string, injectProxy bool, enableAuth bool) error {
+func deploy(name, svcName, dType, port1, port2, port3, port4, version string, injectProxy bool) error {
 	// write template
 	configFile := name + "-" + dType + ".yaml"
 
@@ -232,9 +234,9 @@ func deploy(name, svcName, dType, port1, port2, port3, port4, version string, in
 		"port4":   port4,
 		"version": version,
 	}
-	if enableAuth {
+	if params.enable_auth {
 		settings["enable_auth"] = "--enable_auth"
-		settings["auth_config_path"] = "--auth_config_path /etc/certs"
+		settings["auth_config_path"] = "--auth_config_path " + DefaultAuthConfigPath
 	}
 	if err := write("test/integration/"+dType+".yaml.tmpl", settings, w); err != nil {
 		return err
@@ -251,7 +253,8 @@ func deploy(name, svcName, dType, port1, port2, port3, port4, version string, in
 			SidecarProxyUID:  inject.DefaultSidecarProxyUID,
 			SidecarProxyPort: inject.DefaultSidecarProxyPort,
 			Version:          "manager-integration-test",
-			enableAuth:       enableAuth,
+			EnableAuth:       params.enable_auth,
+			AuthConfigPath:   DefaultAuthConfigPath,
 		}
 		if err := inject.IntoResourceFile(p, w, writer); err != nil {
 			return err
