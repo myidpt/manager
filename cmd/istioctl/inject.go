@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 
-	"istio.io/manager/cmd"
 	"istio.io/manager/cmd/version"
 	"istio.io/manager/platform/kube/inject"
 
@@ -34,12 +33,15 @@ var (
 	mixerAddr        string
 	sidecarProxyUID  int64
 	sidecarProxyPort int
-	runtimeVerbosity int
+	verbosity        int
 	versionStr       string // override build version
 	enableCoreDump   bool
 
 	inFilename  string
 	outFilename string
+
+	authConfigPath string
+	enableAuth     bool
 )
 
 var (
@@ -93,14 +95,16 @@ Example usage:
 			}
 			params := &inject.Params{
 				InitImage:        inject.InitImageName(hub, tag),
-				RuntimeImage:     inject.RuntimeImageName(hub, tag),
-				RuntimeVerbosity: runtimeVerbosity,
+				ProxyImage:       inject.ProxyImageName(hub, tag),
+				Verbosity:        verbosity,
 				ManagerAddr:      managerAddr,
 				MixerAddr:        mixerAddr,
 				SidecarProxyUID:  sidecarProxyUID,
 				SidecarProxyPort: sidecarProxyPort,
 				Version:          versionStr,
 				EnableCoreDump:   enableCoreDump,
+				EnableAuth:       enableAuth,
+				AuthConfigPath:   authConfigPath,
 			}
 			return inject.IntoResourceFile(params, reader, writer)
 		},
@@ -120,8 +124,8 @@ func init() {
 		inject.DefaultManagerAddr, "Manager service DNS address")
 	injectCmd.PersistentFlags().StringVar(&mixerAddr, "mixerAddr",
 		inject.DefaultMixerAddr, "Mixer DNS address")
-	injectCmd.PersistentFlags().IntVar(&runtimeVerbosity, "verbosity",
-		inject.DefaultRuntimeVerbosity, "Runtime verbosity")
+	injectCmd.PersistentFlags().IntVar(&verbosity, "verbosity",
+		inject.DefaultVerbosity, "Runtime verbosity")
 	injectCmd.PersistentFlags().Int64Var(&sidecarProxyUID, "sidecarProxyUID",
 		inject.DefaultSidecarProxyUID, "Sidecar proxy UID")
 	injectCmd.PersistentFlags().IntVar(&sidecarProxyPort, "sidecarProxyPort",
@@ -137,5 +141,8 @@ func init() {
 		true, "Enable/Disable core dumps in injected proxy (--coreDump=true affects "+
 			"all pods in a node and should only be used the cluster admin)")
 
-	cmd.RootCmd.AddCommand(injectCmd)
+	injectCmd.PersistentFlags().BoolVar(&enableAuth, "enable_auth", false,
+		"Enable/Disable mutual TLS authentication for proxy-to-proxy traffic")
+	injectCmd.PersistentFlags().StringVar(&authConfigPath, "auth_config_path", "/etc/certs/",
+		"The directory in which certificate and key files are stored")
 }

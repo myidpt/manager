@@ -43,8 +43,7 @@ const (
 	DefaultMixerAddr        = "istio-mixer:9091"
 	DefaultSidecarProxyUID  = int64(1337)
 	DefaultSidecarProxyPort = 15001
-	DefaultRuntimeVerbosity = 2
-	DefaultAuthConfigPath   = "/etc/certs"
+	DefaultVerbosity        = 2
 )
 
 const (
@@ -52,25 +51,28 @@ const (
 	istioSidecarAnnotationSidecarValue = "injected"
 	istioSidecarAnnotationVersionKey   = "alpha.istio.io/version"
 	initContainerName                  = "init"
-	runtimeContainerName               = "proxy"
+	proxyContainerName                 = "proxy"
 	enableCoreDumpContainerName        = "enable-core-dump"
 	enableCoreDumpImage                = "alpine"
+
+	istioCertVolumeName   = "istio-cert"
+	istioCertSecretPrefix = "istio."
 )
 
 // InitImageName returns the fully qualified image name for the istio
 // init image given a docker hub and tag.
 func InitImageName(hub, tag string) string { return hub + "/init:" + tag }
 
-// RuntimeImageName returns the fully qualified image name for the istio
-// runtime image given a docker hub and tag.
-func RuntimeImageName(hub, tag string) string { return hub + "/runtime:" + tag }
+// ProxyImageName returns the fully qualified image name for the istio
+// proxy image given a docker hub and tag.
+func ProxyImageName(hub, tag string) string { return hub + "/proxy:" + tag }
 
 // Params describes configurable parameters for injecting istio proxy
 // into kubernetes resource.
 type Params struct {
 	InitImage        string
-	RuntimeImage     string
-	RuntimeVerbosity int
+	ProxyImage       string
+	Verbosity        int
 	ManagerAddr      string
 	MixerAddr        string
 	SidecarProxyUID  int64
@@ -78,6 +80,7 @@ type Params struct {
 	Version          string
 	EnableCoreDump   bool
 	EnableAuth       bool
+	AuthConfigPath   string
 }
 
 var enableCoreDumpContainer = map[string]interface{}{
@@ -139,71 +142,75 @@ func injectIntoPodTemplateSpec(p *Params, t *v1.PodTemplateSpec) error {
 	t.Annotations["pod.beta.kubernetes.io/init-containers"] = string(initAnnotationValue)
 
 	// sidecar proxy container
-	container := v1.Container{
-			Name:  runtimeContainerName,
-			Image: p.RuntimeImage,
-			Args: []string{
-				"proxy",
-				"sidecar",
-				"-s", p.ManagerAddr,
-				"-m", p.MixerAddr,
-				"--auth_config_path", DefaultAuthConfigPath,
-				"-n", "$(POD_NAMESPACE)",
-				"-v", strconv.Itoa(p.RuntimeVerbosity),
-			},
-			Env: []v1.EnvVar{{
-				Name: "POD_NAME",
-				ValueFrom: &v1.EnvVarSource{
-					FieldRef: &v1.ObjectFieldSelector{
-						FieldPath: "metadata.name",
-					},
-				},
-			}, {
-				Name: "POD_NAMESPACE",
-				ValueFrom: &v1.EnvVarSource{
-					FieldRef: &v1.ObjectFieldSelector{
-						FieldPath: "metadata.namespace",
-					},
-				},
-			}, {
-				Name: "POD_IP",
-				ValueFrom: &v1.EnvVarSource{
-					FieldRef: &v1.ObjectFieldSelector{
-						FieldPath: "status.podIP",
-					},
-				},
-			}},
-			ImagePullPolicy: v1.PullAlways,
-			SecurityContext: &v1.SecurityContext{
-				RunAsUser: &p.SidecarProxyUID,
-			},
-		}
-
-	// Mount the secret volume.
+	args := []string{
+		"proxy",
+		"sidecar",
+		"-s", p.ManagerAddr,
+		"-m", p.MixerAddr,
+		"-n", "$(POD_NAMESPACE)",
+		"-v", strconv.Itoa(p.Verbosity),
+	}
+	var volumeMounts []v1.VolumeMount
 	if p.EnableAuth {
-		container.Args = append(container.Args, "--enable_auth")
-		container.VolumeMounts = append(container.VolumeMounts, v1.VolumeMount{
-			Name: "secret-volume",
-			ReadOnly: true,
-			MountPath: DefaultAuthConfigPath,
+		args = append(args, "--enable_auth", "--auth_config_path", p.AuthConfigPath)
+		volumeMounts = append(volumeMounts, v1.VolumeMount{
+			Name:      istioCertVolumeName,
+			ReadOnly:  true,
+			MountPath: p.AuthConfigPath,
 		})
 
-		secretVolumeSource := v1.SecretVolumeSource{
-				SecretName: "istio.default",
-			}
+		sa := t.Spec.ServiceAccountName
+		if sa == "" {
+			sa = "default"
+		}
 		t.Spec.Volumes = append(t.Spec.Volumes, v1.Volume{
-			Name: "secret-volume",
+			Name: istioCertVolumeName,
 			VolumeSource: v1.VolumeSource{
-				Secret: &secretVolumeSource,
+				Secret: &v1.SecretVolumeSource{
+					SecretName: istioCertSecretPrefix + sa,
+				},
 			},
 		})
 	}
-	t.Spec.Containers = append(t.Spec.Containers, container)
+
+	sidecar := v1.Container{
+		Name:  proxyContainerName,
+		Image: p.ProxyImage,
+		Args:  args,
+		Env: []v1.EnvVar{{
+			Name: "POD_NAME",
+			ValueFrom: &v1.EnvVarSource{
+				FieldRef: &v1.ObjectFieldSelector{
+					FieldPath: "metadata.name",
+				},
+			},
+		}, {
+			Name: "POD_NAMESPACE",
+			ValueFrom: &v1.EnvVarSource{
+				FieldRef: &v1.ObjectFieldSelector{
+					FieldPath: "metadata.namespace",
+				},
+			},
+		}, {
+			Name: "POD_IP",
+			ValueFrom: &v1.EnvVarSource{
+				FieldRef: &v1.ObjectFieldSelector{
+					FieldPath: "status.podIP",
+				},
+			},
+		}},
+		ImagePullPolicy: v1.PullAlways,
+		SecurityContext: &v1.SecurityContext{
+			RunAsUser: &p.SidecarProxyUID,
+		},
+		VolumeMounts: volumeMounts,
+	}
+	t.Spec.Containers = append(t.Spec.Containers, sidecar)
 
 	return nil
 }
 
-// IntoResourceFile injects the istio runtime into the specified
+// IntoResourceFile injects the istio proxy into the specified
 // kubernetes YAML file.
 func IntoResourceFile(p *Params, in io.Reader, out io.Writer) error {
 	reader := yamlDecoder.NewYAMLReader(bufio.NewReaderSize(in, 4096))
