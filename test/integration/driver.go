@@ -43,7 +43,7 @@ const (
 	egressProxy      = "egress-proxy"
 	ingressProxy     = "ingress-proxy"
 	app              = "app"
-	DefaultSecret    = "istio.default"
+	DefaultSecretName    = "istio.default"
 
 	// budget is the maximum number of retries with 1s delays
 	budget = 90
@@ -129,6 +129,11 @@ func setup() {
 		params.verbosity = 2
 	}
 
+	if params.enable_auth {
+		// Auth certs are only configured for default namespace.
+		params.namespace = "default"
+	}
+
 	check(setupClient())
 
 	var err error
@@ -154,8 +159,8 @@ func setup() {
 
 	if params.enable_auth {
 		// setup auth resources
-		_, _ = shell(fmt.Sprintf("kubectl -n %s create secret generic " + DefaultSecret +
-		"--from-file=cert-chain.pem=test/integration/default_certs/cert-chain.pem "+
+		_, _ = shell(fmt.Sprintf("kubectl -n %s create secret generic " + DefaultSecretName +
+		" --from-file=cert-chain.pem=test/integration/default_certs/cert-chain.pem "+
 		"--from-file=key.pem=test/integration/default_certs/key.pem "+
 		"--from-file=root-cert.pem=test/integration/default_certs/root-cert.pem",
 		params.namespace))
@@ -174,6 +179,7 @@ func setup() {
 	check(deploy("hello", "hello", app, "8080", "80", "9090", "90", "v1", true))
 	check(deploy("world-v1", "world", app, "80", "8000", "90", "9090", "v1", true))
 	check(deploy("world-v2", "world", app, "80", "8000", "90", "9090", "v2", true))
+
 
 	check(setPods())
 }
@@ -199,7 +205,7 @@ func teardown() {
 		glog.Warning(err)
 	}
 	if params.enable_auth {
-		if err := run("kubectl delete secret " + DefaultSecret + " -n " + params.namespace); err != nil {
+		if err := run("kubectl delete secret " + DefaultSecretName + " -n " + params.namespace); err != nil {
 			glog.Warning(err)
 		}
 	}

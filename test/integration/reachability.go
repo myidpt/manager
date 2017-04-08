@@ -67,8 +67,11 @@ func (r *reachability) run() error {
 		if err := r.checkProxyAccessLogs(); err != nil {
 			return err
 		}
-		if err := r.checkMixerLogs(); err != nil {
-			return err
+		if params.namespace != "default" {
+			// The logs cannot be found on Mixer when using default namespace.
+			if err := r.checkMixerLogs(); err != nil {
+				return err
+			}
 		}
 	}
 	glog.Info("Success!")
