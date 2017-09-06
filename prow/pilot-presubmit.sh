@@ -43,17 +43,17 @@ else
 fi
 
 echo '=== Bazel Build ==='
-./bin/install-prereqs.sh
-./bin/init.sh
+#./bin/install-prereqs.sh
+#./bin/init.sh
 
-echo '=== Code Check ==='
-./bin/check.sh
+#echo '=== Code Check ==='
+#./bin/check.sh
 
-echo '=== Bazel Tests ==='
-bazel test //...
+#echo '=== Bazel Tests ==='
+#bazel test //...
 
 echo '=== Build istioctl ==='
-./bin/upload-istioctl -p "gs://istio-artifacts/pilot/${GIT_SHA}/artifacts/istioctl"
+./bin/upload-istioctl -p "gs://yonggangl-istio/pilot/${GIT_SHA}/artifacts/istioctl"
 
 echo '=== Running e2e Tests ==='
-./bin/e2e.sh -tag "${GIT_SHA}" -hub 'gcr.io/istio-testing'
+./bin/e2e.sh -tag "${GIT_SHA}" -hub 'gcr.io/yonggangl-istio'

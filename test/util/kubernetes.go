@@ -48,12 +48,6 @@ func CreateNamespace(cl kubernetes.Interface) (string, error) {
 
 // DeleteNamespace removes a namespace
 func DeleteNamespace(cl kubernetes.Interface, ns string) {
-	if ns != "" && ns != "default" {
-		if err := cl.CoreV1().Namespaces().Delete(ns, &meta_v1.DeleteOptions{}); err != nil {
-			glog.Warningf("Error deleting namespace: %v", err)
-		}
-		glog.Infof("Deleted namespace %s", ns)
-	}
 }
 
 // GetPods gets pod names in a namespace
